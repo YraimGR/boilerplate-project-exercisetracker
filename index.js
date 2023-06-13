@@ -22,9 +22,9 @@ const userSchema = new mongoose.Schema({
 const User = mongoose.model('User', userSchema);
 
 const exeSchema = new mongoose.Schema({
-  "userId": String,
-  "descsription": String,
-  "duration": Number,
+  "userId": { type: String, required: true },
+  "description": { type: String, required: true },
+  "duration": { type: Number, required: true },
   "date": Date
 })
 const Exercise = mongoose.model('Exercise', exeSchema);
@@ -55,25 +55,46 @@ app.post('/api/users', (req, res) => {
 });
 
 app.post('/api/users/:_id/exercises', (req, res) => {
-  const { date, duration, description } = req.body;
+  const { duration, description } = req.body;
   const id = req.params._id;
+  let date = req.body.date !== undefined && req.body.date != null ? new Date(req.body.date) : new Date();
 
   User.findOne({ _id: id }, (err, data) => {
     if (err) console.error(err);
     else {
       if (data != null) {
-        Exercise.find({ date: date, description: description, userId: id, duration: parseInt(duration) }, (err, log) => {
-          if (log != null && log.length > 0) {
-            console.log(data, log);
-            res.json({ _id: data._id, username: data.username, date: log.date, duration: log.duration, description: log.description });
-          } else {
-            const exercise = new Exercise({ userId: id, description: description, duration: parseInt(duration), date: new Date(date).toDateString("yyyy-mm-dd") });
-            console.log(data, exercise);
-            exercise.save().then((exe) => {
-              res.json({ _id: exe.userId, username: data.username, date: exe.date, duration: exe.duration, description: exe.description })
-            })
-          }
+        // Exercise.find({
+        //   date: date, description: description, userId: id,
+        //   duration: parseInt(duration)
+        // }, (err, log) => {
+        //   if (err) res.status(201).json(err);
+        //   if (log !== null) {
+        //     res.json({
+        //       _id: data._id,
+        //       username: data.username,
+        //       date: log.date.toDateString("yyyy-mm-dd"),
+        //       duration: parseInt(log.duration),
+        //       description: log.description
+        //     });
+        //   } else {
+        const exercise = new Exercise({
+          userId: id,
+          description: description,
+          duration: parseInt(duration),
+          date: date
         });
+        exercise.save((err2, exe) => {
+          if (err2) res.status(201).json(err2);
+          res.json({
+            _id: exe.userId,
+            username: data.username,
+            date: new Date(exe.date).toDateString("yyyy-mm-dd"),
+            duration: parseInt(exe.duration),
+            description: exe.description
+          })
+        })
+        // }
+        // });
       } else
         res.json("no user found");
     }
@@ -83,44 +104,82 @@ app.post('/api/users/:_id/exercises', (req, res) => {
 app.get('/api/users', (req, res) => {
   User.find().then((data) => {
     if (data)
-      res.json(data.map(({ username, _id }) => { return { "_id": _id, "username": username } }));
+      res.json(data.map(({ username, _id }) => {
+        return { "_id": _id, "username": username }
+      }));
     else
       res.json("no data registered");
   })
 })
 
 app.get('/api/users/:id/logs', (req, res) => {
-  const { from, to, limit } = req.query;
+  let findConditions = { userId: req.params.id };
+
+  if (
+    (req.query.from !== undefined && req.query.from !== '')
+    ||
+    (req.query.to !== undefined && req.query.to !== '')
+  ) {
+    findConditions.date = {};
+
+    if (req.query.from !== undefined && req.query.from !== '') {
+      findConditions.date.$gte = new Date(req.query.from);
+    }
+
+    if (findConditions.date.$gte == 'Invalid Date') {
+      return res.json({ error: 'from date is invalid' });
+    }
+
+    if (req.query.to !== undefined && req.query.to !== '') {
+      findConditions.date.$lte = new Date(req.query.to);
+    }
+
+    if (findConditions.date.$lte == 'Invalid Date') {
+      return res.json({ error: 'to date is invalid' });
+    }
+  }
+
+  let limit = (req.query.limit !== undefined ? parseInt(req.query.limit) : 0);
+
+  if (isNaN(limit)) {
+    return res.json({ error: 'limit is not a number' });
+  }
+
   User.findOne({ _id: req.params.id }, (err, user) => {
     if (err) console.error(err);
     else {
       if (user != null) {
-        if (limit != null) {
-          Exercise.find({ userId: user._id })
-            .limit(parseInt(limit))
-            .exec((err, logs) => {
-              if (err) console.error(err);
-              if (logs != null && logs.length > 0) {
-                let filteredLogs = (from != null && to != null) ? logs.filter(x => x.date >= Date.parse(from) && x.date <= Date.parse(to)) : logs;
-                res.json({ _id: user._id, username: user.username, count: logs.length, log: filteredLogs.map(({ description, duration, date }) => { return { "description": description, "duration": duration, "date": date.toDateString("yyyy-mm-dd") } }) });
-              }
-              else
-                res.json({ _id: user._id, username: user.username, count: 0, log: [] });
-            });
-        }
-        else
-          Exercise.find({ userId: user._id }, (err, logs) => {
-            if (err) console.error(err);
-            if (logs != null && logs.length > 0) {
-              let filteredLogs = (from != null && to != null) ? logs.filter(x => x.date >= Date.parse(from) && x.date <= Date.parse(to)) : logs;
-              res.json({ _id: user._id, username: user.username, count: logs.length, log: filteredLogs.map(({ description, duration, date }) => { return { "description": description, "duration": duration, "date": date.toDateString("yyyy-mm-dd") } }) });
+        Exercise.find(findConditions)
+          .sort({ date: 'asc' })
+          .limit(limit)
+          .exec((err2, logs) => {
+            if (err2) console.error(err2);
+            if (logs != null) {
+              res.json({
+                _id: user._id,
+                username: user.username,
+                count: logs.length,
+                log: logs.map((l) => {
+                  return {
+                    "description": l.description,
+                    "duration": l.duration,
+                    "date": new Date(l.date).toDateString("yyyy-mm-dd")
+                  }
+                })
+              });
             }
-            else
-              res.json({ _id: user._id, username: user.username, count: 0, log: [] });
+            // else
+            //   res.json({
+            //     _id: user._id,
+            //     username: user.username,
+            //     count: 0,
+            //     log: []
+            //   });
           });
+
       }
       else
-        res.json("no user matched!");
+        res.json("user not found!");
     }
   })
 })
